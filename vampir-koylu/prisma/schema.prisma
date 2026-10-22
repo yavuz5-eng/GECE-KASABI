@@ -1,0 +1,35 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model Profile {
+  id String @id
+  sessionHash String @unique
+  nickname String
+  avatar String
+  createdAt DateTime @default(now())
+}
+model Room {
+  code String @id
+  state Json
+  updatedAt DateTime @updatedAt
+}
+model Match {
+  id String @id
+  roomCode String
+  result String
+  summary Json
+  endedAt DateTime @default(now())
+  participants Participation[]
+}
+model Participation {
+  matchId String
+  profileId String
+  outcome String
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  @@id([matchId, profileId])
+  @@index([profileId])
+}

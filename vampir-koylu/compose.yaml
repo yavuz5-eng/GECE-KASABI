@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vampir
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_password}
+      POSTGRES_DB: vampir
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vampir -d vampir"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  app:
+    build: .
+    # Yerel HTTP/LAN denemesi için development: cookie Secure olmaz.
+    # HTTPS üretiminde NODE_ENV=production ve PUBLIC_ORIGIN ayarlayın.
+    environment:
+      DATABASE_URL: postgresql://vampir:${POSTGRES_PASSWORD:-local_dev_password}@db:5432/vampir?schema=public
+      NODE_ENV: ${NODE_ENV:-development}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      HOST: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  postgres_data:
