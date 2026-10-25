@@ -1,5 +1,17 @@
 # Doğrulama raporu
 
+## Son düzeltme doğrulaması — çıkış ve boş isim
+
+22 Ekim 2026: `npm run build` başarılı. Ayrı `leave_fix_20261022` PostgreSQL test şemasında **65/65 Vitest testi geçti** (36 mevcut motor, 17 çıkış/isim, 10 gerçek HTTP/Socket.IO ve 2 depolama testi; yaklaşık 24 sn). Mevcut veriler sıfırlanmadı veya silinmedi. İlk izin engeli ve test dosyası yazımı bekleme sorunu giderildikten sonraki son sonuç budur.
+
+**8/8 Playwright testi Chromium ve WebKit'te geçti** (yaklaşık 2,3 dk). Bu koşu ayrı dosya test deposuyla yapıldı. Mevcut altı oyunculu tam maç, geçici bağlantı kesilmesi ve yenileme testleri korunuyor. Yeni 360 px senaryoları: aktif maçtan onay/vazgeç ile çıkış, ana ekrana dönüş, yenilemede eski odaya dönmeme, profilin korunması, yeni oda kurma, başka odaya katılma, sahiplik devri; boş/boşluklu isimde alan altı uyarı, aria bağlantısı, odak, geçerli isimde temizlenme ve başka sunucu hatasının isim hatası sayılmaması.
+
+Sunucu regresyonu eski oda kodlu komutları ve oda kodu taşımayan komutları reddediyor; ayrılan oyuncuya yalnız yeni odasının görünümleri geliyor. Açık ayrılma sunucu yeniden başlatıldıktan sonra da kalıcı. Ayrılan kişinin oy/eylemleri ve kendisine yönelik hedefler temizleniyor; avcı/soytarı tetiklenmiyor. Son katılımcı önceliği ve 30 dakika tümü bağlantısız kalma kapanışı sınanıyor. Tamamlanmadı sonucu yeniden başlatmada çoğalmıyor ve kazanma istatistiği üretmiyor.
+
+Gerçek telefon veya canlı Render doğrulaması yapılmadı. Commit, GitHub push ve deploy yapılmadı. Aktarma adımları `UPDATE-NOTES.md` içindedir.
+
+## Önceki ilk teslimat doğrulaması
+
 Tarih: 22 Ekim 2026. Windows, Node.js 24.15.0, gerçek yerel PostgreSQL 18.4, Prisma 6.19.3. PostgreSQL uygulama/test/önizleme verileri ayrı şemalarda çalıştırıldı. Harici kullanıcı verisi kullanılmadı.
 
 ## Başarılı sonuçlar

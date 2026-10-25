@@ -37,17 +37,24 @@ export const roleDescriptions: Record<Role, string> = {
     "Yalnız gündüz oylamasıyla elenirsen tek başına kazanırsın. Gece veya avcıyla elenmek zafer getirmez.",
 };
 export const avatars = ["🦊", "🐺", "🦉", "🐈‍⬛", "🦇", "🐻", "🐰", "🦌"];
+export const nicknameSchema = z
+  .string()
+  .trim()
+  .superRefine((value, ctx) => {
+    const message = !value
+      ? "İsim girilmedi. Lütfen bir oyuncu adı yaz."
+      : value.length < 2
+        ? "Oyuncu adı en az 2 karakter olmalı."
+        : value.length > 20
+          ? "Oyuncu adı en fazla 20 karakter olmalı."
+          : !/^[\p{L}\p{N} _.-]+$/u.test(value)
+            ? "Yalnız harf, sayı, boşluk ve ._- kullanın."
+            : undefined;
+    if (message) ctx.addIssue({ code: "custom", message });
+  });
 export const profileSchema = z
   .object({
-    nickname: z
-      .string()
-      .trim()
-      .min(2)
-      .max(20)
-      .regex(
-        /^[\p{L}\p{N} _.-]+$/u,
-        "Yalnız harf, sayı, boşluk ve ._- kullanın.",
-      ),
+    nickname: nicknameSchema,
     avatar: z.enum(["🦊", "🐺", "🦉", "🐈‍⬛", "🦇", "🐻", "🐰", "🦌"]),
   })
   .strict();
@@ -112,6 +119,7 @@ export const codeSchema = z
   .regex(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
 export const commandSchema = z
   .object({
+    roomCode: codeSchema,
     actionId: z.string().uuid(),
     phaseVersion: z.number().int().nonnegative(),
     type: z.enum([
@@ -167,6 +175,7 @@ export interface PublicPlayer {
   connected: boolean;
   ready: boolean;
   alive: boolean;
+  departed?: boolean;
   role?: Role;
 }
 export interface LogEntry {

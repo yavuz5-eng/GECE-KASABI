@@ -12,6 +12,7 @@ import {
   winnerNames,
   suggestedSettings,
   settingsSchema,
+  nicknameSchema,
   type RoomView,
   type Settings,
   type Command,
@@ -68,6 +69,17 @@ function App() {
     [history, setHistory] = useState<History[]>([]),
     [now, setNow] = useState(Date.now()),
     [sound, setSound] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const [nameAttempted, setNameAttempted] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaveError, setLeaveError] = useState("");
+  const nameInput = useRef<HTMLInputElement>(null);
+  const leaveDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = leaveDialog.current;
+    if (leaveOpen) dialog?.showModal();
+    else dialog?.close();
+  }, [leaveOpen]);
   const socket = useRef<Socket | null>(null),
     offset = useRef(0),
     lastPhase = useRef(-1),
@@ -130,6 +142,14 @@ function App() {
           setPage("home");
           setNotice(text);
           setHidden(true);
+          setLeaveOpen(false);
+          setShowSettings(false);
+          setQr(false);
+          lastPhase.current = -1;
+          if (text) {
+            setCode("");
+            window.history.replaceState(null, "", location.pathname);
+          }
         });
         s.on("replaced", () => {
           s.io.reconnection(false);
@@ -179,19 +199,56 @@ function App() {
     }
   }
   async function saveProfile() {
+    const parsed = nicknameSchema.safeParse(nickname);
+    setNameAttempted(true);
+    if (!parsed.success) {
+      setNameError(parsed.error.issues[0].message);
+      nameInput.current?.focus();
+      return false;
+    }
+    setNameError("");
     const r = await fetch("/api/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nickname, avatar }),
+      body: JSON.stringify({ nickname: parsed.data, avatar }),
     });
     const result = await r.json();
     if (!r.ok) throw new Error(result.error);
     setProfile((p) => (p ? { ...p, nickname, avatar } : p));
+    return true;
+  }
+  async function leaveGame() {
+    if (!view || busy) return;
+    setBusy(true);
+    setLeaveError("");
+    setError("");
+    try {
+      await send("command", {
+        type: "leave",
+        roomCode: view.code,
+        phaseVersion: view.phaseVersion,
+        actionId: uid(),
+      });
+      setView(null);
+      setPage("home");
+      setLeaveOpen(false);
+      setHidden(true);
+    } catch (e) {
+      const message =
+        e instanceof Error
+          ? e.message
+          : "Çıkış kaydedilemedi. Yeniden deneyin.";
+      if (leaveOpen) setLeaveError(message);
+      else setError(message);
+    } finally {
+      setBusy(false);
+    }
   }
   const command = (type: Command["type"], extra: Partial<Command> = {}) =>
     run(() =>
       send("command", {
         type,
+        roomCode: view!.code,
         phaseVersion: view!.phaseVersion,
         actionId: uid(),
         ...extra,
@@ -237,13 +294,29 @@ function App() {
       <label>
         Takma adın
         <input
+          ref={nameInput}
           aria-label="Takma adın"
+          aria-invalid={nameError ? true : undefined}
+          aria-describedby={nameError ? "nickname-error" : undefined}
           autoComplete="nickname"
           maxLength={20}
           placeholder="Kasaba seni nasıl tanısın?"
           value={nickname}
-          onChange={(e) => setNickname(e.target.value)}
+          onChange={(e) => {
+            setNickname(e.target.value);
+            if (nameAttempted) {
+              const result = nicknameSchema.safeParse(e.target.value);
+              setNameError(
+                result.success ? "" : result.error.issues[0].message,
+              );
+            }
+          }}
         />
+        {nameError && (
+          <span id="nickname-error" className="field-error" role="alert">
+            {nameError}
+          </span>
+        )}
       </label>
       <div className="avatar-picker" aria-label="Avatar seçimi">
         {avatars.map((a) => (
@@ -284,6 +357,51 @@ function App() {
           {status === "Bağlı" ? "● Çevrimiçi" : `◌ ${status}`}
         </span>
       </header>
+      {view && (
+        <div className="exit-bar">
+          <button
+            disabled={busy}
+            onClick={() => {
+              if (view.phase !== "lobby" && view.phase !== "ended") {
+                setLeaveError("");
+                setLeaveOpen(true);
+              } else void leaveGame();
+            }}
+          >
+            Oyundan çık
+          </button>
+        </div>
+      )}
+      <dialog
+        ref={leaveDialog}
+        className="leave-dialog"
+        aria-labelledby="leave-title"
+        aria-describedby="leave-description"
+        onCancel={(e) => {
+          e.preventDefault();
+          if (!busy) setLeaveOpen(false);
+        }}
+      >
+        <h2 id="leave-title">Oyundan ayrılmak istiyor musun?</h2>
+        <p id="leave-description">Bu maçtaki katılımın sona erecek.</p>
+        {leaveError && (
+          <p className="field-error" role="alert">
+            {leaveError}
+          </p>
+        )}
+        <div className="button-row">
+          <button autoFocus disabled={busy} onClick={() => setLeaveOpen(false)}>
+            Vazgeç
+          </button>
+          <button
+            className="primary"
+            disabled={busy}
+            onClick={() => void leaveGame()}
+          >
+            Oyundan çık
+          </button>
+        </div>
+      </dialog>
       {status === "Başka sekmede açık" && (
         <div className="banner">
           Bu oturumun son açılan sekmesi etkin. Buradan devam etmek için sayfayı
@@ -393,7 +511,7 @@ function App() {
             disabled={busy}
             onClick={() =>
               run(async () => {
-                await saveProfile();
+                if (!(await saveProfile())) return;
                 setNotice("Profil kaydedildi.");
               })
             }
@@ -485,15 +603,17 @@ function App() {
                       </strong>
                       <small>
                         {p.id === view.hostId ? "♛ Oda sahibi · " : ""}
-                        {!p.connected
-                          ? "◌ Bağlantısı kesildi"
-                          : view.phase === "lobby"
-                            ? p.ready
-                              ? "✓ Hazır"
-                              : "Hazırlanıyor"
-                            : p.alive
-                              ? "● Hayatta"
-                              : "✕ Elendi"}
+                        {p.departed
+                          ? "↪ Oyundan ayrıldı"
+                          : !p.connected
+                            ? "◌ Bağlantısı kesildi"
+                            : view.phase === "lobby"
+                              ? p.ready
+                                ? "✓ Hazır"
+                                : "Hazırlanıyor"
+                              : p.alive
+                                ? "● Hayatta"
+                                : "✕ Elendi"}
                         {p.role ? ` · ${roleNames[p.role]}` : ""}
                       </small>
                     </div>
@@ -781,11 +901,6 @@ function App() {
             </div>
           </div>
           <div className="room-footer">
-            {(view.phase === "lobby" || view.phase === "ended") && (
-              <button onClick={() => command("leave")} disabled={busy}>
-                Odadan ayrıl
-              </button>
-            )}
             <button onClick={() => setPage("rules")}>Nasıl oynanır?</button>
             <label className="sound">
               <input
@@ -810,7 +925,7 @@ function App() {
             onChange={setSettings}
             onSave={() =>
               run(async () => {
-                await saveProfile();
+                if (!(await saveProfile())) return;
                 await send("create", settings);
                 setPage("home");
               })
@@ -872,7 +987,7 @@ function App() {
                 onSubmit={(e) => {
                   e.preventDefault();
                   void run(async () => {
-                    await saveProfile();
+                    if (!(await saveProfile())) return;
                     await send("join", code.trim().toUpperCase());
                   });
                 }}

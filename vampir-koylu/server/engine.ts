@@ -16,6 +16,7 @@ export interface Player {
   avatar: string;
   connected: boolean;
   disconnectedAt?: number;
+  leftAt?: number;
   ready: boolean;
   alive: boolean;
   role?: Role;
@@ -46,6 +47,51 @@ export interface Room {
 const fail = (text: string): never => {
   throw new Error(text);
 };
+// Missing leftAt in older snapshots means the player is still a participant.
+export const isParticipant = (p: Player) => p.leftAt === undefined;
+const isAlive = (p: Player) => isParticipant(p) && p.alive;
+export const activeMatch = (room: Room) =>
+  room.phase !== "lobby" && room.phase !== "ended";
+function transferHost(room: Room) {
+  const remaining = room.players.filter(isParticipant);
+  room.hostId =
+    remaining.find((p) => p.connected)?.id ?? remaining[0]?.id ?? "";
+}
+function leaveRoom(room: Room, p: Player, now: number) {
+  if (room.phase === "lobby")
+    room.players = room.players.filter((x) => x.id !== p.id);
+  else {
+    p.leftAt = now;
+    p.connected = false;
+    p.ready = false;
+    if (activeMatch(room)) p.alive = false;
+  }
+  delete room.actions[p.id];
+  delete room.votes[p.id];
+  for (const [id, target] of Object.entries(room.actions))
+    if (target === p.id) delete room.actions[id];
+  for (const [id, target] of Object.entries(room.votes))
+    if (target === p.id) delete room.votes[id];
+  if (room.hostId === p.id) transferHost(room);
+  if (room.players.some((x) => isParticipant(x) && x.connected))
+    room.emptySince = undefined;
+  else room.emptySince ??= now;
+  if (!activeMatch(room)) return;
+  log(room, `${p.nickname} oyundan ayrıldı.`);
+  if (!room.players.some(isParticipant)) {
+    abandon(room, now);
+    return;
+  }
+  if (room.hunterId === p.id) {
+    const next = room.afterHunter!;
+    room.hunterId = undefined;
+    room.afterHunter = undefined;
+    resume(room, next, now);
+  } else if (!room.hunterId) {
+    const result = winner(room);
+    if (result) finish(room, result, now);
+  }
+}
 export function createRoom(
   code: string,
   player: Player,
@@ -107,7 +153,7 @@ function nextNight(room: Room, now: number) {
   log(room, `${room.day}. gece başladı.`);
 }
 export function winner(room: Room): Winner | undefined {
-  const alive = room.players.filter((p) => p.alive);
+  const alive = room.players.filter(isAlive);
   const vampires = alive.filter((p) => p.role === "vampire").length;
   if (!alive.length) return "draw";
   if (!vampires) return "village";
@@ -182,13 +228,16 @@ export function applyCommand(
 ) {
   const c = commandSchema.parse(input);
   const p =
-    room.players.find((p) => p.id === playerId) ?? fail("Bu odada değilsiniz.");
-  if (c.phaseVersion !== room.phaseVersion)
+    room.players.find((p) => p.id === playerId && isParticipant(p)) ??
+    fail("Bu odada değilsiniz.");
+  if (c.roomCode !== room.code) fail("Bu komut başka bir odaya ait.");
+  if (c.type !== "leave" && c.phaseVersion !== room.phaseVersion)
     fail("Bu faz sona erdi; güncel ekranı kullanın.");
-  if (room.deadline !== null && now >= room.deadline)
+  if (c.type !== "leave" && room.deadline !== null && now >= room.deadline)
     fail("Eylem süresi doldu.");
   if (room.seen.includes(c.actionId)) fail("Bu eylem zaten işlendi.");
-  if (room.seen.length >= 4096) fail("Bu faz için eylem sınırına ulaşıldı.");
+  if (c.type !== "leave" && room.seen.length >= 4096)
+    fail("Bu faz için eylem sınırına ulaşıldı.");
   const host = () => {
     if (room.hostId !== p.id) fail("Yalnız oda sahibi yapabilir.");
   };
@@ -196,7 +245,7 @@ export function applyCommand(
     if (room.phase !== s) fail("Bu eylem bu fazda yapılamaz.");
   };
   const target = () =>
-    room.players.find((x) => x.id === c.target && x.alive) ??
+    room.players.find((x) => x.id === c.target && isAlive(x)) ??
     fail("Yaşayan bir hedef seçin.");
   switch (c.type) {
     case "ready":
@@ -222,14 +271,7 @@ export function applyCommand(
       room.players = room.players.filter((x) => x.id !== c.target);
       break;
     case "leave":
-      if (room.phase !== "lobby" && room.phase !== "ended")
-        fail("Maç sürüyor; bağlantıyı kapatıp sonra dönebilirsiniz.");
-      room.players = room.players.filter((x) => x.id !== p.id);
-      if (room.hostId === p.id)
-        room.hostId =
-          room.players.find((x) => x.connected)?.id ??
-          room.players[0]?.id ??
-          "";
+      leaveRoom(room, p, now);
       break;
     case "start":
       phase("lobby");
@@ -251,6 +293,7 @@ export function applyCommand(
     case "rematch":
       phase("ended");
       host();
+      room.players = room.players.filter(isParticipant);
       room.players.forEach((x) => {
         x.role = undefined;
         x.alive = true;
@@ -303,6 +346,16 @@ export function applyCommand(
   room.seen.push(c.actionId);
 }
 export function advance(room: Room, now: number): boolean {
+  if (
+    activeMatch(room) &&
+    (!room.players.some(isParticipant) ||
+      (!room.players.some((p) => isParticipant(p) && p.connected) &&
+        room.emptySince !== undefined &&
+        now - room.emptySince >= 30 * 60_000))
+  ) {
+    abandon(room, now);
+    return true;
+  }
   if (room.deadline === null || now < room.deadline) return false;
   const at = room.deadline;
   switch (room.phase) {
@@ -313,11 +366,12 @@ export function advance(room: Room, now: number): boolean {
       enter(room, "nightResolution", at, 1);
       break;
     case "nightResolution": {
-      const alive = room.players.filter((p) => p.alive);
+      const alive = room.players.filter(isAlive);
       const counts: Record<string, number> = {};
       let protection: string | undefined;
       for (const p of alive) {
-        const t = room.actions[p.id];
+        const requested = room.actions[p.id];
+        const t = alive.some((x) => x.id === requested) ? requested : undefined;
         if (p.role === "doctor") {
           protection = t;
           p.previousProtection = t;
@@ -355,9 +409,10 @@ export function advance(room: Room, now: number): boolean {
     case "voteResolution": {
       const votes: Record<string, number> = {};
       let pass = 0;
-      for (const p of room.players.filter((x) => x.alive)) {
+      for (const p of room.players.filter(isAlive)) {
         const t = room.votes[p.id];
-        if (t) votes[t] = (votes[t] ?? 0) + 1;
+        if (t && room.players.some((x) => x.id === t && isAlive(x)))
+          votes[t] = (votes[t] ?? 0) + 1;
         else pass++;
       }
       room.voteResult = { votes, pass };
@@ -392,7 +447,7 @@ export function advance(room: Room, now: number): boolean {
       const t = room.actions[id];
       room.hunterId = undefined;
       room.afterHunter = undefined;
-      if (t && room.players.some((p) => p.id === t && p.alive))
+      if (t && room.players.some((p) => p.id === t && isAlive(p)))
         eliminate(room, t, "hunter", at, next);
       else {
         log(room, "Avcının seçim süresi sona erdi.");
@@ -411,7 +466,8 @@ export function playerView(
   now: number,
 ): RoomView {
   const p =
-    room.players.find((p) => p.id === playerId) ?? fail("Bu odada değilsiniz.");
+    room.players.find((p) => p.id === playerId && isParticipant(p)) ??
+    fail("Bu odada değilsiniz.");
   const me: RoomView["me"] = { id: p.id, history: structuredClone(p.history) };
   if (p.role) me.role = p.role;
   if (p.alive && room.phase === "night") {
@@ -425,7 +481,7 @@ export function playerView(
   }
   if (p.role === "vampire" && p.alive && !me.teammates)
     me.teammates = room.players
-      .filter((x) => x.role === "vampire")
+      .filter((x) => isParticipant(x) && x.role === "vampire")
       .map((x) => ({ id: x.id, target: null }));
   if (room.phase === "vote" && p.alive) me.selection = room.votes[p.id];
   if (room.phase === "hunter" && room.hunterId === p.id)
@@ -446,6 +502,7 @@ export function playerView(
       connected: x.connected,
       ready: x.ready,
       alive: x.alive,
+      departed: !isParticipant(x),
       ...((room.phase === "ended" ||
         (!x.alive && room.settings.revealEliminated)) &&
       x.role

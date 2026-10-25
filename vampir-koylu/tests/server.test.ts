@@ -109,6 +109,7 @@ function command(
 ) {
   return send(c, "command", {
     type,
+    roomCode: c.view!.code,
     phaseVersion: c.view!.phaseVersion,
     actionId: randomUUID(),
     ...extra,
@@ -180,6 +181,7 @@ describe.sequential("real Socket.IO server security and recovery", () => {
     const target = clients.find((c) => c.view?.me.role === "villager")!;
     const c = {
       type: "night",
+      roomCode: v.view!.code,
       phaseVersion: v.view!.phaseVersion,
       actionId: randomUUID(),
       target: target.id,
@@ -261,4 +263,124 @@ describe.sequential("real Socket.IO server security and recovery", () => {
     await waitFor(() => b.view?.hostId === b.id);
     expect(b.view!.players).toHaveLength(1);
   });
+  it("active departure frees membership, isolates broadcasts and persists across restart", async () => {
+    const group: (typeof clients)[number][] = [];
+    for (let i = 0; i < 6; i++) group.push(await client());
+    const host = group[0];
+    await send(host, "create", suggestedSettings());
+    await waitFor(() => !!host.view);
+    const oldCode = host.view!.code;
+    for (const c of group.slice(1)) await send(c, "join", oldCode);
+    for (const c of group) await command(c, "ready", { ready: true });
+    await command(host, "start");
+    await waitFor(() => group.every((c) => c.view?.phase === "reveal"));
+    const villager = group.find(
+      (c) => c.id !== host.id && c.view?.me.role === "villager",
+    )!;
+    const before = await (
+      await fetch(base + "/api/me", { headers: { Cookie: host.cookie } })
+    ).json();
+    expect((await command(villager, "leave")).ok).toBe(true);
+    expect((await send(villager, "join", clients[7].view!.code)).ok).toBe(true);
+    expect((await command(host, "leave")).ok).toBe(true);
+    const remaining = group.filter((c) => c !== host && c !== villager);
+    await waitFor(() => remaining[0].view?.hostId === remaining[0].id);
+    const me = await (
+      await fetch(base + "/api/me", { headers: { Cookie: host.cookie } })
+    ).json();
+    expect(me.roomCode).toBeNull();
+    expect(me.id).toBe(before.id);
+    expect(me.nickname).toBe(before.nickname);
+    const seen: string[] = [];
+    host.socket.on("view", (v) => seen.push(v.code));
+    expect((await send(host, "create", suggestedSettings())).ok).toBe(true);
+    await waitFor(() => host.view?.code !== oldCode);
+    const nextCode = host.view!.code;
+    expect(
+      (
+        await command(host, "leave", {
+          roomCode: oldCode,
+          phaseVersion: host.view!.phaseVersion,
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      (await command(host, "ready", { roomCode: oldCode, ready: true })).ok,
+    ).toBe(false);
+    expect(
+      (
+        await send(host, "command", {
+          type: "ready",
+          actionId: randomUUID(),
+          phaseVersion: 0,
+          ready: true,
+        })
+      ).ok,
+    ).toBe(false);
+    await command(remaining[0], "leave");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((code) => code === nextCode)).toBe(true);
+    await stop();
+    host.view = undefined;
+    await boot();
+    await waitFor(() => host.view?.code === nextCode);
+    expect(
+      (
+        await (
+          await fetch(base + "/api/me", { headers: { Cookie: host.cookie } })
+        ).json()
+      ).roomCode,
+    ).toBe(nextCode);
+    const persisted = db
+      ? (await db.room.findUniqueOrThrow({ where: { code: oldCode } })).state
+      : JSON.parse(await readFile(file, "utf8")).rooms[oldCode];
+    expect(
+      (persisted as any).players.find((p: any) => p.id === host.id).leftAt,
+    ).toBeTypeOf("number");
+    expect((await send(host, "join", oldCode)).ok).toBe(false);
+  }, 25000);
+  it("all disconnected timeout is persisted, ends once, and yields no winning statistic", async () => {
+    const group: (typeof clients)[number][] = [];
+    for (let i = 0; i < 6; i++) group.push(await client());
+    const host = group[0];
+    await send(host, "create", suggestedSettings());
+    await waitFor(() => !!host.view);
+    const code = host.view!.code;
+    for (const c of group.slice(1)) await send(c, "join", code);
+    for (const c of group) await command(c, "ready", { ready: true });
+    await command(host, "start");
+    for (const c of group) c.socket.disconnect();
+    await new Promise((r) => setTimeout(r, 300));
+    await stop();
+    if (db) {
+      const row = await db.room.findUniqueOrThrow({ where: { code } });
+      const state = row.state as any;
+      state.emptySince = Date.now() - 31 * 60_000;
+      await db.room.update({ where: { code }, data: { state } });
+    } else {
+      const data = JSON.parse(await readFile(file, "utf8"));
+      data.rooms[code].emptySince = Date.now() - 31 * 60_000;
+      await writeFile(file, JSON.stringify(data));
+    }
+    await boot();
+    await waitFor(async () => {
+      const h = await (
+        await fetch(base + "/api/history", { headers: { Cookie: host.cookie } })
+      ).json();
+      return h.length === 1 && h[0].outcome === "unfinished";
+    });
+    if (!db) await waitFor(async () => {
+      const persisted = JSON.parse(await readFile(file, 'utf8'));
+      return persisted.history[host.id]?.length === 1;
+    });
+    await stop();
+    await boot();
+    const h = await (
+      await fetch(base + "/api/history", { headers: { Cookie: host.cookie } })
+    ).json();
+    expect(h).toHaveLength(1);
+    expect(h[0].result).toBe("unfinished");
+  }, 25000);
 });
+

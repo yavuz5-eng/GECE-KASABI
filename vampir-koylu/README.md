@@ -98,7 +98,11 @@ Hesap gerekmez. Kalıcı misafir profili, bu tarayıcıda bir yıllık HttpOnly/
 
 Son 100 maçın sonuçları ve özeti profil ekranında gösterilir. Bu pencerenin galibiyet/mağlubiyet/beraberlik/tamamlanmadı sayıları hesaplanır. Takım kazandığında elenmiş üyeler de kazanır; soytarı köylü zaferinden pay almaz. Tamamlanmayan maçlar kazanma/kaybetme sonucu üretmez. Geçmiş kaydı yalnız maç bittikten veya tamamlanmadı olarak kapandıktan sonra oluşturulur; devam eden maçın rolleri geçmişten alınamaz.
 
-Bağlantı kesilmesi oyuncuyu öldürmez ve rolü değiştirmez. Sayaçlar işler; yeniden bağlanırken güncel görünüm gönderilir. Son bağlanan sekme etkin olur ve önceki bağlantıya açıklama gönderilip bağlantı kapatılır. Ev sahibi lobi/oyun sonundan açıkça ayrılırsa hemen, bağlantısı kesilirse 20 saniye sonra katılım sırasındaki ilk bağlı oyuncuya sahiplik geçer. Aktif maçta oyuncu listeden çıkarılmaz. Herkes 30 dakika bağlantısızsa maç “tamamlanmadı” olarak kapanır.
+Bağlantı kesilmesi oyuncuyu öldürmez ve rolü değiştirmez. Sayaçlar işler; yeniden bağlanırken güncel görünüm gönderilir. Son bağlanan sekme etkin olur ve önceki bağlantıya açıklama gönderilip bağlantı kapatılır. Ev sahibi herhangi bir fazda açıkça ayrılırsa hemen, bağlantısı kesilirse 20 saniye sonra katılım sırasındaki ilk bağlı oyuncuya sahiplik geçer. Açık ayrılmada bağlı kimse yoksa ilk kalan katılımcı sahip olur. Herkes 30 dakika bağlantısızsa maç “tamamlanmadı” olarak kapanır.
+
+Üstteki “Oyundan çık” düğmesi aktif maçta onay ister. Sunucu kaydı başarıyla tamamlayınca ana ekrana dönülür; çerez, profil ve geçmiş korunur. Ayrılan oyuncu yeni oda kurabilir veya başka odaya katılabilir. Aktif maçtaki tarihsel rol kaydı saklanır, fakat oyuncu artık üye veya yaşayan oyuncu sayılmaz; eski odadan görünüm alamaz. Kendi oyları/eylemleri ve kendisini hedefleyen bekleyen seçimler temizlenir. Geçersiz oylar sonuçta pas sayılır. Ayrılma avcı/soytarı yeteneğini tetiklemez. Bekleyen avcı ayrılırsa seçimi iptal edilip oyun devam eder; başka katılımcı ayrıldığında bekleyen avcı çözümlenmeden takım zaferi verilmez. Açıkça ayrılmamış hiç katılımcı kalmazsa takım zaferinden önce maç tamamlanmadı kapanır. Bu kurallar sekme kapatmaya veya geçici bağlantı kesilmesine uygulanmaz.
+
+İsim alanı boş veya yalnız boşluksa devam etme denemesinde alan altında açıklama ve kırmızı kenarlık gösterilir. 2–20 karakter ve mevcut karakter sınırlaması ortak istemci/sunucu şemasıyla doğrulanır. Geçerli isimde uyarı temizlenir.
 
 ## Mimari ve kurtarma
 
@@ -116,6 +120,10 @@ Faz sürümü, son tarih, oturum üyeliği, rol, hedef ve benzersiz eylem UUID's
 Sunucu her oyuncu için **izin verilen alanları seçerek** ayrı görünüm üretir. Tam durum yayınlanmaz. Herkese açık oyuncu listesinde rol ancak oda ayarıyla elenince veya maç bitince yer alır. Kâhin geçmişi ve vampir hedefleri uygun özel görünümde bulunur; oda sahibi istisna değildir. HTTP oturum/oyun yanıtlarında `no-store`; service worker yoktur. Token ve roller loglanmaz.
 
 ### Faz sözleşmesi
+
+Tüm fazlarda ayrıca açık ayrılma komutu kabul edilir. Çıkış onayı sırasında faz değişebilir; bu nedenle yalnız `leave` için eski faz sürümü/zaman aşımı kabul edilir, ancak **oda kodu ve aktif üyelik her zaman doğrulanır**. Diğer bütün komutlarda faz ve son tarih denetimi devam eder. Yeni `roomCode` alanı eski odadan gecikmiş komutların yeni odada çalışmasını engeller. Yayından sonra eski açık istemciler sayfayı yenilemelidir.
+
+Oyuncunun isteğe bağlı `leftAt` alanı JSONB oda durumuna kaydedilir. Eski kayıtlarda alan yoksa oyuncu ayrılmamış kabul edilir. Veritabanı migration veya sıfırlama gerekmez; tarihsel oyuncular yeniden maç lobisine alınmaz.
 
 | Faz              | Eylem / yetki                                   | Süre dolumu ve sonraki faz                  | Gösterilen bilgi                                   |
 | ---------------- | ----------------------------------------------- | ------------------------------------------- | -------------------------------------------------- |

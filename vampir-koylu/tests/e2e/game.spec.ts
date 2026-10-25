@@ -113,7 +113,7 @@ test("six mobile sessions play a complete match, reconnect, refresh and rematch"
     await expect(
       pages[0].getByRole("button", { name: "Hazırım", exact: true }),
     ).toBeVisible();
-    await pages[0].getByRole("button", { name: "Odadan ayrıl" }).click();
+    await pages[0].getByRole("button", { name: "Oyundan çık" }).click();
     await pages[0]
       .getByRole("button", { name: "Profil ve geçmiş", exact: false })
       .click();

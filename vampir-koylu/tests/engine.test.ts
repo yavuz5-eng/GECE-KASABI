@@ -45,6 +45,7 @@ function act(
     {
       type,
       target,
+      roomCode: r.code,
       phaseVersion: r.phaseVersion,
       actionId: randomUUID(),
       ...extra,
@@ -303,6 +304,7 @@ describe("privacy and authority", () => {
         {
           type: "night",
           target: "p4",
+          roomCode: r.code,
           phaseVersion: 0,
           actionId: randomUUID(),
           playerId: "p1",
@@ -316,6 +318,7 @@ describe("privacy and authority", () => {
     const c: Command = {
       type: "night",
       target: "p4",
+      roomCode: r.code,
       phaseVersion: 0,
       actionId: randomUUID(),
     };

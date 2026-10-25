@@ -22,6 +22,7 @@ import {
   advance,
   playerView,
   abandon,
+  isParticipant,
   type Room,
 } from "./engine.js";
 import { PostgresStore, TestStore, type Store, type Profile } from "./store.js";
@@ -102,7 +103,9 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   return job;
 }
 const membership = (id: string) =>
-  [...rooms.values()].find((r) => r.players.some((p) => p.id === id));
+  [...rooms.values()].find((r) =>
+    r.players.some((p) => p.id === id && isParticipant(p)),
+  );
 app.get("/api/me", async (req, res) => {
   try {
     const p = await exclusive(async () => {
@@ -220,6 +223,7 @@ function message(e: unknown) {
 }
 function broadcast(room: Room) {
   for (const p of room.players) {
+    if (!isParticipant(p) || membership(p.id)?.code !== room.code) continue;
     const socket = active.get(p.id);
     if (socket) socket.emit("view", playerView(room, p.id, Date.now()));
   }
@@ -230,15 +234,6 @@ async function commit(room: Room) {
   broadcast(room);
 }
 async function catchUp(room: Room) {
-  if (
-    room.emptySince &&
-    Date.now() - room.emptySince >= 30 * 60_000 &&
-    room.phase !== "lobby" &&
-    room.phase !== "ended"
-  ) {
-    abandon(room, Date.now());
-    return true;
-  }
   let changed = false;
   let count = 0;
   while (advance(room, Date.now())) {
@@ -317,6 +312,8 @@ io.on("connection", (socket) => {
     const command = commandSchema.parse(input);
     const existing = membership(profile.id);
     if (!existing) throw new Error("Odada değilsiniz.");
+    if (command.roomCode !== existing.code)
+      throw new Error("Bu komut başka bir odaya ait. Güncel odayı kullanın.");
     const r = structuredClone(existing);
     if (await catchUp(r)) await commit(r);
     applyCommand(r, profile.id, command, Date.now());
@@ -338,7 +335,7 @@ io.on("connection", (socket) => {
       p.disconnectedAt = undefined;
       copy.emptySince = undefined;
       await commit(copy);
-    }
+    } else socket.emit("removed", "");
   }).catch(() => socket.emit("notice", "Durum alınamadı. Sayfayı yenileyin."));
   socket.on("disconnect", () => {
     void exclusive(async () => {
@@ -350,8 +347,8 @@ io.on("connection", (socket) => {
         const p = copy.players.find((p) => p.id === profile.id)!;
         p.connected = false;
         p.disconnectedAt = Date.now();
-        if (!copy.players.some((p) => p.connected))
-          copy.emptySince = Date.now();
+        if (!copy.players.some((p) => isParticipant(p) && p.connected))
+          copy.emptySince ??= Date.now();
         await commit(copy);
       }
     }).catch(() => {});
@@ -366,15 +363,7 @@ const timer = setInterval(() => {
       const r = structuredClone(original);
       let changed = false;
       const now = Date.now();
-      if (
-        r.emptySince &&
-        now - r.emptySince >= 30 * 60_000 &&
-        r.phase !== "lobby" &&
-        r.phase !== "ended"
-      ) {
-        abandon(r, now);
-        changed = true;
-      } else changed = await catchUp(r);
+      changed = await catchUp(r);
       const host = r.players.find((p) => p.id === r.hostId);
       if (
         host &&
@@ -382,7 +371,7 @@ const timer = setInterval(() => {
         host.disconnectedAt &&
         now - host.disconnectedAt >= 20_000
       ) {
-        const next = r.players.find((p) => p.connected);
+        const next = r.players.find((p) => isParticipant(p) && p.connected);
         if (next) {
           r.hostId = next.id;
           changed = true;
